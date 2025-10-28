@@ -4,7 +4,6 @@ $ResourceGroupName = $Env:resourceGroupName
 $WorkspaceName = $Env:workspaceName
 $WorkspaceId = $Env:workspaceId
 $Directory = $Env:directory
-$Creds = $Env:creds
 $contentTypes = $Env:contentTypes
 $contentTypeMapping = @{
     "AnalyticsRule"=@("Microsoft.OperationalInsights/workspaces/providers/alertRules", "Microsoft.OperationalInsights/workspaces/providers/alertRules/actions");
@@ -14,7 +13,7 @@ $contentTypeMapping = @{
     "Playbook"=@("Microsoft.Web/connections", "Microsoft.Logic/workflows", "Microsoft.Web/customApis");
     "Workbook"=@("Microsoft.Insights/workbooks");
 }
-$sourceControlId = $Env:sourceControlId 
+$sourceControlId = $Env:sourceControlId
 $rootDirectory = $Env:rootDirectory
 $githubAuthToken = $Env:githubAuthToken
 $githubRepository = $Env:GITHUB_REPOSITORY
@@ -90,7 +89,7 @@ $metadataFilePath = "metadata.json"
         }
     ]
 }
-"@ | Out-File -FilePath $metadataFilePath 
+"@ | Out-File -FilePath $metadataFilePath
 
 $resourceTypes = $contentTypes.Split(",") | ForEach-Object { $contentTypeMapping[$_] } | ForEach-Object { $_.ToLower() }
 $MaxRetries = 3
@@ -110,7 +109,7 @@ $header = @{
     "authorization" = "Bearer $githubAuthToken"
 }
 
-#Gets all files and commit shas using Get Trees API 
+#Gets all files and commit shas using Get Trees API
 function GetGithubTree {
     $branchResponse = AttemptInvokeRestMethod "Get" "https://api.github.com/repos/$githubRepository/branches/$branchName" $null $null 3
     $treeUrl = "https://api.github.com/repos/$githubRepository/git/trees/" + $branchResponse.commit.sha + "?recursive=true"
@@ -118,7 +117,7 @@ function GetGithubTree {
     return $getTreeResponse
 }
 
-#Creates a table using the reponse from the tree api, creates a table 
+#Creates a table using the reponse from the tree api, creates a table
 function GetCommitShaTable($getTreeResponse) {
     $shaTable = @{}
     $supportedExtensions = @(".json", ".bicep", ".bicepparam");
@@ -135,7 +134,7 @@ function GetCommitShaTable($getTreeResponse) {
 function PushCsvToRepo() {
     $content = ConvertTableToString
     $relativeCsvPath = RelativePathWithBackslash $csvPath
-    $resourceBranchExists = git ls-remote --heads "https://github.com/$githubRepository" $newResourceBranch | wc -l 
+    $resourceBranchExists = git ls-remote --heads "https://github.com/$githubRepository" $newResourceBranch | wc -l
 
     if ($resourceBranchExists -eq 0) {
         git switch --orphan $newResourceBranch
@@ -146,7 +145,7 @@ function PushCsvToRepo() {
         git fetch > $null
         git checkout $newResourceBranch
     }
-    
+
     Write-Output $content > $relativeCsvPath
     git add $relativeCsvPath
     git commit -m "Modified tracking table"
@@ -159,10 +158,10 @@ function ReadCsvToTable {
     $HashTable=@{}
     foreach($r in $csvTable)
     {
-        $key = AbsolutePathWithSlash $r.FileName 
+        $key = AbsolutePathWithSlash $r.FileName
         $HashTable[$key]=$r.CommitSha
-    }   
-    return $HashTable    
+    }
+    return $HashTable
 }
 
 function AttemptInvokeRestMethod($method, $url, $body, $contentTypes, $maxRetries) {
@@ -189,57 +188,6 @@ function AttemptInvokeRestMethod($method, $url, $body, $contentTypes, $maxRetrie
     return $result
 }
 
-function AttemptAzLogin($psCredential, $tenantId, $cloudEnv) {
-    $maxLoginRetries = 3
-    $delayInSeconds = 30
-    $retryCount = 1
-    $stopTrying = $false
-    do {
-        try {
-            Connect-AzAccount -ServicePrincipal -Tenant $tenantId -Credential $psCredential -Environment $cloudEnv | out-null;
-            Write-Host "Login Successful"
-            $stopTrying = $true
-        }
-        catch {
-            if ($retryCount -ge $maxLoginRetries) {
-                Write-Host "Login failed after $maxLoginRetries attempts."
-                $stopTrying = $true
-            }
-            else {
-                Write-Host "Login attempt failed, retrying in $delayInSeconds seconds."
-                Start-Sleep -Seconds $delayInSeconds
-                $retryCount++
-            }
-        }
-    }
-    while (-not $stopTrying)
-}
-
-function ConnectAzCloud {
-    $RawCreds = $Creds | ConvertFrom-Json
-
-    Clear-AzContext -Scope Process;
-    Clear-AzContext -Scope CurrentUser -Force -ErrorAction SilentlyContinue;
-    
-    if ($CloudEnv -ne 'AzureChinaCloud' -and $CloudEnv -ne 'AzureUSGovernment') 
-    {
-        Write-Output "Attempting Adding new cloud";
-
-        Add-AzEnvironment `
-        -Name $CloudEnv `
-        -ActiveDirectoryEndpoint $RawCreds.activeDirectoryEndpointUrl `
-        -ResourceManagerEndpoint $RawCreds.resourceManagerEndpointUrl `
-        -ActiveDirectoryServiceEndpointResourceId $RawCreds.activeDirectoryServiceEndpointResourceId `
-        -GraphEndpoint $RawCreds.graphEndpointUrl | out-null;
-    }
-
-    $servicePrincipalKey = ConvertTo-SecureString $RawCreds.clientSecret.replace("'", "''") -AsPlainText -Force
-    $psCredential = New-Object System.Management.Automation.PSCredential($RawCreds.clientId, $servicePrincipalKey)
-
-    AttemptAzLogin $psCredential $RawCreds.tenantId $CloudEnv
-    Set-AzContext -Tenant $RawCreds.tenantId | out-null;
-}
-
 function AttemptDeployMetadata($deploymentName, $resourceGroupName, $templateObject, $templateType, $paramFileType, $containsWorkspaceParam) {
     $deploymentInfo = $null
     try {
@@ -257,19 +205,46 @@ function AttemptDeployMetadata($deploymentName, $resourceGroupName, $templateObj
             $contentId = $resource.Split("/")[-1]
             $metadataCustomVersion = GetMetadataCustomVersion $templateType $paramFileType $containsWorkspaceParam
 
-            try {
-                New-AzResourceGroupDeployment -Name "md-$deploymentName" -ResourceGroupName $ResourceGroupName -TemplateFile $metadataFilePath `
-                    -parentResourceId $resource `
-                    -kind $contentKind `
-                    -contentId $contentId `
-                    -sourceControlId $sourceControlId `
-                    -workspace $workspaceName `
-                    -customVersion $metadataCustomVersion `
-                    -ErrorAction Stop | Out-Host
-                Write-Host "[Info] Created metadata metadata for $contentKind with parent resource id $resource"
-            }
-            catch {
-                Write-Host "[Warning] Failed to deploy metadata for $contentKind with parent resource id $resource with error $_"
+            $isSuccess = $false
+            $currentAttempt = 0
+
+            While (($currentAttempt -lt $MaxRetries) -and (-not $isSuccess))
+            {
+                $currentAttempt ++
+                Try
+                {
+                    New-AzResourceGroupDeployment -Name "md-$deploymentName" -ResourceGroupName $ResourceGroupName -TemplateFile $metadataFilePath `
+                        -parentResourceId $resource `
+                        -kind $contentKind `
+                        -contentId $contentId `
+                        -sourceControlId $sourceControlId `
+                        -workspace $workspaceName `
+                        -customVersion $metadataCustomVersion `
+                        -ErrorAction Stop | Out-Host
+                    Write-Host "[Info] Created metadata for $contentKind with parent resource id $resource"
+                    $isSuccess = $true
+                }
+                Catch [Exception]
+                {
+                    $err = $_
+                    if (-not (IsRetryable "md-$deploymentName"))
+                    {
+                        Write-Host "[Warning] Failed to deploy metadata for $contentKind with parent resource id $resource with error: $err"
+                        break
+                    }
+                    else
+                    {
+                        if ($currentAttempt -le $MaxRetries)
+                        {
+                            Write-Host "[Warning] Failed to deploy metadata for $contentKind with error: $err. Retrying in $secondsBetweenAttempts seconds..."
+                            Start-Sleep -Seconds $secondsBetweenAttempts
+                        }
+                        else
+                        {
+                            Write-Host "[Warning] Failed to deploy metadata for $contentKind after $currentAttempt attempts with error: $err"
+                        }
+                    }
+                }
             }
         }
     }
@@ -292,7 +267,7 @@ function GetContentKinds($resource) {
 
 function ToContentKind($contentKinds, $resource, $templateObject) {
     if ($contentKinds.Count -eq 1) {
-       return $contentKinds 
+       return $contentKinds
     }
     if ($null -ne $resource -and $resource.Contains('savedSearches')) {
        if ($templateObject.resources.properties.Category -eq "Hunting Queries") {
@@ -343,7 +318,7 @@ function IsRetryable($deploymentName) {
 function IsValidResourceType($template) {
     try {
         $isAllowedResources = $true
-        $template.resources | ForEach-Object { 
+        $template.resources | ForEach-Object {
             $isAllowedResources = $resourceTypes.contains($_.type.ToLower()) -and $isAllowedResources
         }
     }
@@ -368,30 +343,30 @@ function AttemptDeployment($path, $parameterFile, $deploymentName, $templateObje
     }
     $isSuccess = $false
     $currentAttempt = 0
-    While (($currentAttempt -lt $MaxRetries) -and (-not $isSuccess)) 
+    While (($currentAttempt -lt $MaxRetries) -and (-not $isSuccess))
     {
         $currentAttempt ++
-        Try 
+        Try
         {
             Write-Host "[Info] Deploy $path with parameter file: [$parameterFile]"
             $paramFileType = if(!$parameterFile) {"NoParam"} elseif($parameterFile -like "*.bicepparam") {"BicepParam"} else {"JsonParam"}
             $containsWorkspaceParam = DoesContainWorkspaceParam $templateObject
-            if ($containsWorkspaceParam) 
+            if ($containsWorkspaceParam)
             {
                 if ($parameterFile) {
                     New-AzResourceGroupDeployment -Name $deploymentName -ResourceGroupName $ResourceGroupName -TemplateFile $path -workspace $workspaceName -TemplateParameterFile $parameterFile -ErrorAction Stop | Out-Host
                 }
-                else 
+                else
                 {
                     New-AzResourceGroupDeployment -Name $deploymentName -ResourceGroupName $ResourceGroupName -TemplateFile $path -workspace $workspaceName -ErrorAction Stop | Out-Host
                 }
             }
-            else 
+            else
             {
                 if ($parameterFile) {
                     New-AzResourceGroupDeployment -Name $deploymentName -ResourceGroupName $ResourceGroupName -TemplateFile $path -TemplateParameterFile $parameterFile -ErrorAction Stop | Out-Host
                 }
-                else 
+                else
                 {
                     New-AzResourceGroupDeployment -Name $deploymentName -ResourceGroupName $ResourceGroupName -TemplateFile $path -ErrorAction Stop | Out-Host
                 }
@@ -400,17 +375,17 @@ function AttemptDeployment($path, $parameterFile, $deploymentName, $templateObje
 
             $isSuccess = $true
         }
-        Catch [Exception] 
+        Catch [Exception]
         {
             $err = $_
-            if (-not (IsRetryable $deploymentName)) 
+            if (-not (IsRetryable $deploymentName))
             {
                 Write-Host "[Warning] Failed to deploy $path with error: $err"
                 break
             }
-            else 
+            else
             {
-                if ($currentAttempt -le $MaxRetries) 
+                if ($currentAttempt -le $MaxRetries)
                 {
                     Write-Host "[Warning] Failed to deploy $path with error: $err. Retrying in $secondsBetweenAttempts seconds..."
                     Start-Sleep -Seconds $secondsBetweenAttempts
@@ -482,7 +457,7 @@ function GetParameterFile($path) {
     if ($path.Length -eq 0) {
         return $null
     }
-    
+
     $index = RelativePathWithBackslash $path
     $key = ($global:parameterFileMapping.Keys | Where-Object { $_ -eq $index })
     if ($key) {
@@ -506,7 +481,7 @@ function GetParameterFile($path) {
             return $workspaceParameterFile
         }
     }
-    
+
     $workspaceParameterFile = $parameterFilePrefix + ".parameters-$WorkspaceId.json"
     if (Test-Path $workspaceParameterFile) {
         return $workspaceParameterFile
@@ -532,7 +507,7 @@ function GetParameterFile($path) {
 
 function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
     Write-Host "Starting Deployment for Files in path: $Directory"
-    if (Test-Path -Path $Directory) 
+    if (Test-Path -Path $Directory)
     {
         $totalFiles = 0;
         $totalFailed = 0;
@@ -549,7 +524,7 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
                 Write-Host "[Warning] Skipping deployment for $path. The file doesn't exist."
                 return
             }
-            
+
             if ($path -like "*.bicep") {
                 $templateType = "Bicep"
                 $templateObject = bicep build $path --stdout | Out-String | ConvertFrom-Json
@@ -562,7 +537,7 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
             {
                 Write-Host "[Warning] Skipping deployment for $path. The file contains resources for content that was not selected for deployment. Please add content type to connection if you want this file to be deployed."
                 return
-            }       
+            }
             $parameterFile = GetParameterFile $path
             $result = SmartDeployment $fullDeploymentFlag $remoteShaTable $path $parameterFile $templateObject $templateType
             if ($result.isSuccess -eq $false) {
@@ -579,13 +554,13 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
             }
         }
         PushCsvToRepo
-        if ($totalFiles -gt 0 -and $totalFailed -gt 0) 
+        if ($totalFiles -gt 0 -and $totalFailed -gt 0)
         {
             $err = "$totalFailed of $totalFiles deployments failed."
             Throw $err
         }
     }
-    else 
+    else
     {
         Write-Output "[Warning] $Directory not found. nothing to deploy"
     }
@@ -607,7 +582,7 @@ function SmartDeployment($fullDeploymentFlag, $remoteShaTable, $path, $parameter
         }
         if (!$skip) {
             $deploymentName = GenerateDeploymentName
-            $isSuccess = AttemptDeployment $path $parameterFile $deploymentName $templateObject $templateType 
+            $isSuccess = AttemptDeployment $path $parameterFile $deploymentName $templateObject $templateType
         }
         return @{
             skip = $skip
@@ -630,12 +605,12 @@ function TryGetCsvFile {
     }
 
     $relativeCsvPath = RelativePathWithBackslash $csvPath
-    $resourceBranchExists = git ls-remote --heads "https://github.com/$githubRepository" $newResourceBranch | wc -l 
-    
+    $resourceBranchExists = git ls-remote --heads "https://github.com/$githubRepository" $newResourceBranch | wc -l
+
     if ($resourceBranchExists -eq 1) {
         git fetch > $null
         git checkout $newResourceBranch
-        
+
         if (Test-Path $relativeCsvPath) {
             $global:localCsvTablefinal = ReadCsvToTable
         }
@@ -647,12 +622,6 @@ function main() {
     git config --global user.email "donotreply@microsoft.com"
     git config --global user.name "Sentinel"
 
-    if ($CloudEnv -ne 'AzureCloud') 
-    {
-        Write-Output "Attempting Sign In to Azure Cloud"
-        ConnectAzCloud
-    }
-
     TryGetCsvFile
     LoadDeploymentConfig
     $tree = GetGithubTree
@@ -661,7 +630,7 @@ function main() {
     $existingConfigSha = $global:localCsvTablefinal[$configPath]
     $remoteConfigSha = $remoteShaTable[$configPath]
     $modifiedConfig = ($existingConfigSha -xor $remoteConfigSha) -or ($existingConfigSha -and $remoteConfigSha -and ($existingConfigSha -ne $remoteConfigSha))
-    
+
     if ($remoteConfigSha) {
         $global:updatedCsvTable[$configPath] = $remoteConfigSha
     }
